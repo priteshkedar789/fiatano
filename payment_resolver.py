@@ -24,6 +24,7 @@ _TRANSFER_TYPE_MAP = {
 _SORTED_TRANSFER_TYPES = sorted(_TRANSFER_TYPE_MAP.items(), key=lambda x: -len(x[0]))
 
 _UPI_FIELD_NAMES = {"upi", "vpa", "upi id", "upi address", "virtual payment address"}
+_PHONE_FIELD_NAMES = {"phone", "mobile", "contact", "mobile number", "phone number"}
 
 _RTGS_THRESHOLD = 500_000.0
 
@@ -44,6 +45,7 @@ def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDet
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
     payee_name: str = "Beneficiary"
+    phone: Optional[str] = None
 
     for field in fields:
         name = field.get("fieldName", "").lower()
@@ -57,6 +59,11 @@ def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDet
                 upi_id = value
             else:
                 logger.warning("Skipping invalid UPI ID: %s", value)
+
+        if any(ind in name for ind in _PHONE_FIELD_NAMES):
+            digits = "".join(c for c in value if c.isdigit())
+            if 10 <= len(digits) <= 12:
+                phone = digits[-10:]  # last 10 digits, strips country code if present
 
         is_account = (
             ("account" in name and "number" in name)
@@ -80,7 +87,7 @@ def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDet
             payee_name = value
 
     if upi_id:
-        return PaymentDetails(method="UPI", payee_name=payee_name, upi_id=upi_id)
+        return PaymentDetails(method="UPI", payee_name=payee_name, upi_id=upi_id, phone=phone)
 
     if account_number and ifsc_code:
         pay_upper = (pay_type or "IMPS").upper()
@@ -96,6 +103,7 @@ def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDet
             payee_name=payee_name,
             account_number=account_number,
             ifsc_code=ifsc_code,
+            phone=phone,
         )
 
     raise PayoutResolutionError(

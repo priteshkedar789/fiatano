@@ -22,6 +22,7 @@ class PaymentDetails:
     upi_id: Optional[str] = None
     account_number: Optional[str] = None
     ifsc_code: Optional[str] = None
+    phone: Optional[str] = None   # required by Cashfree addBeneficiary; falls back to placeholder
 
 
 @dataclass(frozen=True)
