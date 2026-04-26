@@ -3,6 +3,7 @@
 No side effects. No I/O. No state.
 """
 import logging
+import re
 from typing import List, Optional
 
 from .domain import PaymentDetails
@@ -19,14 +20,19 @@ _TRANSFER_TYPE_MAP = {
     "UPI": "UPI",
 }
 
+# Sorted longest-first so more-specific keys win over substrings (e.g. IMPSPAN beats IMPS)
+_SORTED_TRANSFER_TYPES = sorted(_TRANSFER_TYPE_MAP.items(), key=lambda x: -len(x[0]))
+
 _UPI_FIELD_NAMES = {"upi", "vpa", "upi id", "upi address", "virtual payment address"}
 
 _RTGS_THRESHOLD = 500_000.0
 
+# NPCI UPI format: handle@provider; handle 3-50 chars, provider 3-20 alphanumeric
+_UPI_PATTERN = re.compile(r'^[a-zA-Z0-9.\-_]{3,50}@[a-zA-Z0-9]{3,20}$')
+
 
 def _valid_upi(upi_id: str) -> bool:
-    parts = upi_id.split("@")
-    return len(parts) == 2 and bool(parts[0]) and bool(parts[1])
+    return len(upi_id) <= 50 and bool(_UPI_PATTERN.match(upi_id))
 
 
 def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDetails:
@@ -79,7 +85,7 @@ def resolve(pay_methods: List[dict], pay_type: str, amount: float) -> PaymentDet
     if account_number and ifsc_code:
         pay_upper = (pay_type or "IMPS").upper()
         method = next(
-            (v for k, v in _TRANSFER_TYPE_MAP.items() if k in pay_upper),
+            (v for k, v in _SORTED_TRANSFER_TYPES if k in pay_upper),
             "IMPS",
         )
         if amount > _RTGS_THRESHOLD:

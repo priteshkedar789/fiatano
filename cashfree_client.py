@@ -2,7 +2,6 @@
 import logging
 import threading
 import time
-import uuid
 from collections import deque
 
 import requests
@@ -12,6 +11,8 @@ from .domain import PaymentDetails, PayoutRecord
 logger = logging.getLogger(__name__)
 
 _API_VERSION = "2023-08-01"
+_RETRY_ATTEMPTS = 3
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
 class CashfreeClient:
@@ -45,11 +46,30 @@ class CashfreeClient:
                 logger.warning("Rate limit reached. Sleeping %.2fs", sleep_time)
                 time.sleep(sleep_time)
 
+    def _request(self, method: str, url: str, **kwargs) -> dict:
+        last_exc: Exception = RuntimeError("no attempts made")
+        for attempt in range(_RETRY_ATTEMPTS):
+            self._check_rate_limit()
+            try:
+                response = self._session.request(method, url, **kwargs)
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code not in _RETRY_STATUSES or attempt == _RETRY_ATTEMPTS - 1:
+                    raise
+                last_exc = e
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt == _RETRY_ATTEMPTS - 1:
+                    raise
+                last_exc = e
+            delay = 2 ** attempt
+            logger.warning("Cashfree %s %s failed, retry %d/%d in %ds: %s",
+                           method, url, attempt + 1, _RETRY_ATTEMPTS, delay, last_exc)
+            time.sleep(delay)
+        raise last_exc
+
     def get_balance(self) -> float:
-        self._check_rate_limit()
-        response = self._session.get(f"{self._base}/payout/v1.2/getBalance", timeout=30)
-        response.raise_for_status()
-        result = response.json()
+        result = self._request("GET", f"{self._base}/payout/v1.2/getBalance", timeout=30)
         if result.get("status") != "SUCCESS":
             raise RuntimeError(f"Balance check failed: {result}")
         return float(result.get("data", {}).get("availableBalance", 0))
@@ -84,21 +104,18 @@ class CashfreeClient:
             "beneficiaryDetails": {
                 "beneId": idempotency_key,
                 "beneName": payment_details.payee_name or "Beneficiary",
-                "beneContact": "",
                 "beneInstrument": bene_instrument,
             },
             "remarks": f"Order No: {order_number}",
         }
 
-        self._check_rate_limit()
         try:
-            response = self._session.post(
+            result = self._request(
+                "POST",
                 f"{self._base}/payout/v1.2/directTransfer",
                 json=payload,
                 timeout=60,
             )
-            response.raise_for_status()
-            result = response.json()
         except requests.exceptions.HTTPError as e:
             body = {}
             try:
@@ -137,15 +154,13 @@ class CashfreeClient:
     def get_transfer_status(
         self, idempotency_key: str, order_number: str, amount: float, transfer_type: str
     ) -> PayoutRecord:
-        self._check_rate_limit()
         try:
-            response = self._session.get(
+            result = self._request(
+                "GET",
                 f"{self._base}/payout/v1.2/getTransferStatus",
                 params={"referenceId": idempotency_key},
                 timeout=30,
             )
-            response.raise_for_status()
-            result = response.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 return PayoutRecord(

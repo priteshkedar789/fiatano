@@ -67,6 +67,14 @@ class PaymentService:
                     )
                     return self._dispatch(order, payment_details, existing.idempotency_key)
 
+                # All other combinations (PENDING+NOT_FOUND, PENDING+FAILED, INTENT+FAILED, etc.)
+                # are ambiguous — do NOT redispatch; require manual review to avoid double-spend
+                raise PersistenceError(
+                    f"Order {order.order_number}: stored status={existing.status!r} but "
+                    f"Cashfree reports {live.status!r} — "
+                    f"idempotency_key={existing.idempotency_key} — manual review required"
+                )
+
             # FAILED — safe to retry with fresh idempotency key
             if existing.status == "FAILED":
                 logger.info("Order %s: previous attempt FAILED, retrying", order.order_number)

@@ -145,9 +145,10 @@ class OrderProcessor:
 
         # Step 6: Persist Binance confirmation
         if not self._store.confirm_binance(order.order_number):
-            logger.error(
-                "Order %s: Binance mark-paid succeeded but CONFIRMED persistence failed",
-                order.order_number,
+            logger.critical(
+                "Order %s: Binance mark-paid succeeded but CONFIRMED persistence failed — "
+                "payout was dispatched (cf_transfer_id=%s) — manual reconciliation required",
+                order.order_number, payout.cf_transfer_id,
             )
 
         logger.info(

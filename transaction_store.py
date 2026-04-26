@@ -54,50 +54,59 @@ class TransactionStore:
 
     def persist_result(self, record: PayoutRecord) -> bool:
         with self._lock:
-            try:
-                with open(self._path, "a", newline="") as f:
-                    csv.writer(f).writerow([
-                        record.order_number, record.idempotency_key, record.status,
-                        record.amount, record.transfer_type, datetime.now().isoformat(),
-                        record.cf_transfer_id or "", record.utr or "",
-                        record.binance_confirmed, record.error or "",
-                    ])
-                logger.info("Persisted %s for order %s", record.status, record.order_number)
-                return True
-            except Exception as e:
-                logger.error("Failed to persist result for order %s: %s", record.order_number, e)
-                return False
+            return self._append_record(record)
 
     def confirm_binance(self, order_number: str) -> bool:
-        existing = self.get_latest(order_number)
-        if not existing:
-            logger.error("Cannot confirm Binance for unknown order %s", order_number)
-            return False
-        confirmed = PayoutRecord(
-            order_number=existing.order_number,
-            idempotency_key=existing.idempotency_key,
-            status="CONFIRMED",
-            amount=existing.amount,
-            transfer_type=existing.transfer_type,
-            created_at=existing.created_at,
-            cf_transfer_id=existing.cf_transfer_id,
-            utr=existing.utr,
-            binance_confirmed=True,
-        )
-        return self.persist_result(confirmed)
+        with self._lock:
+            existing = self._read_latest(order_number)
+            if not existing:
+                logger.error("Cannot confirm Binance for unknown order %s", order_number)
+                return False
+            confirmed = PayoutRecord(
+                order_number=existing.order_number,
+                idempotency_key=existing.idempotency_key,
+                status="CONFIRMED",
+                amount=existing.amount,
+                transfer_type=existing.transfer_type,
+                created_at=existing.created_at,
+                cf_transfer_id=existing.cf_transfer_id,
+                utr=existing.utr,
+                binance_confirmed=True,
+            )
+            return self._append_record(confirmed)
 
     def get_latest(self, order_number: str) -> Optional[PayoutRecord]:
         with self._lock:
-            try:
-                latest = None
-                with open(self._path, "r", newline="") as f:
-                    for row in csv.DictReader(f):
-                        if row["order_number"] == order_number:
-                            latest = _row_to_record(row)
-                return latest
-            except Exception as e:
-                logger.error("Failed to read store for order %s: %s", order_number, e)
-                return None
+            return self._read_latest(order_number)
+
+    # ── internal helpers (call only while self._lock is held) ──────────────
+
+    def _read_latest(self, order_number: str) -> Optional[PayoutRecord]:
+        try:
+            latest = None
+            with open(self._path, "r", newline="") as f:
+                for row in csv.DictReader(f):
+                    if row["order_number"] == order_number:
+                        latest = _row_to_record(row)
+            return latest
+        except Exception as e:
+            logger.error("Failed to read store for order %s: %s", order_number, e)
+            return None
+
+    def _append_record(self, record: PayoutRecord) -> bool:
+        try:
+            with open(self._path, "a", newline="") as f:
+                csv.writer(f).writerow([
+                    record.order_number, record.idempotency_key, record.status,
+                    record.amount, record.transfer_type, datetime.now().isoformat(),
+                    record.cf_transfer_id or "", record.utr or "",
+                    record.binance_confirmed, record.error or "",
+                ])
+            logger.info("Persisted %s for order %s", record.status, record.order_number)
+            return True
+        except Exception as e:
+            logger.error("Failed to persist result for order %s: %s", record.order_number, e)
+            return False
 
 
 def _row_to_record(row: dict) -> PayoutRecord:
